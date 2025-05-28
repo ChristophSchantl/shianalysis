@@ -6,7 +6,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 warnings.simplefilter("ignore", FutureWarning)
 sns.set_theme(style="darkgrid")
@@ -25,12 +25,23 @@ st.title("📊 Strategie-Analyse & Risiko-Kennzahlen")
 
 st.sidebar.header("🔄 Datenquellen auswählen")
 
+# --- Zeitraum-Auswahl
+default_start = date.today() - timedelta(days=2*365)
+default_end = date.today()
+start_date = st.sidebar.date_input("Startdatum", default_start)
+end_date = st.sidebar.date_input("Enddatum", default_end)
+if start_date > end_date:
+    st.sidebar.error("Das Startdatum muss vor dem Enddatum liegen.")
+    st.stop()
+
+# --- SHI CSV Upload (optional)
 shi_csv_files = st.sidebar.file_uploader(
     "Weitere SHI Zertifikate (optional, CSV)", 
     type=["csv"], 
     accept_multiple_files=True
 )
 
+# --- Yahoo-Ticker Eingabe
 st.sidebar.subheader("Yahoo Finance Ticker auswählen")
 ticker_1 = st.sidebar.text_input("Ticker 1", value="0P0000J5K3.F")
 ticker_2 = st.sidebar.text_input("Ticker 2", value="0P0000J5K8.F")
@@ -44,15 +55,18 @@ ticker_inputs = {
     'Yahoo 4': ticker_4
 }
 
-def load_returns_from_csv(path_or_file):
+def load_returns_from_csv(path_or_file, start_date=None, end_date=None):
     df = pd.read_csv(path_or_file, index_col=0, parse_dates=True)
+    if start_date and end_date:
+        # Filter nach Datum
+        df = df[(df.index.date >= start_date) & (df.index.date <= end_date)]
     close = pd.to_numeric(df['Close'], errors='coerce').ffill().dropna()
     returns = close.pct_change().dropna()
     cumulative = (1 + returns).cumprod()
     return returns, cumulative
 
-def load_returns_from_yahoo(ticker):
-    df = yf.download(ticker, start="2024-01-01", progress=False)['Close'].dropna()
+def load_returns_from_yahoo(ticker, start_date, end_date):
+    df = yf.download(ticker, start=start_date, end=end_date + timedelta(days=1), progress=False)['Close'].dropna()
     returns = df.pct_change().dropna()
     cumulative = (1 + returns).cumprod()
     return returns, cumulative
@@ -65,12 +79,12 @@ def get_yahoo_name(ticker):
         return ticker
 
 @st.cache_data
-def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs):
+def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs, start_date, end_date):
     returns_dict, cumulative_dict = {}, {}
     # Feste CSVs laden
     for name, path in csv_paths.items():
         try:
-            ret, cum = load_returns_from_csv(path)
+            ret, cum = load_returns_from_csv(path, start_date, end_date)
             returns_dict[name] = ret
             cumulative_dict[name] = cum
         except Exception as e:
@@ -78,7 +92,7 @@ def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs):
     # Optional hochgeladene CSVs
     for file in shi_csv_files:
         name = file.name.replace(".csv", "")
-        ret, cum = load_returns_from_csv(file)
+        ret, cum = load_returns_from_csv(file, start_date, end_date)
         returns_dict[name] = ret
         cumulative_dict[name] = cum
     # Yahoo Ticker - mit echtem Namen
@@ -86,7 +100,7 @@ def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs):
         if ticker:
             try:
                 yahoo_name = get_yahoo_name(ticker)
-                ret, cum = load_returns_from_yahoo(ticker)
+                ret, cum = load_returns_from_yahoo(ticker, start_date, end_date)
                 returns_dict[yahoo_name] = ret
                 cumulative_dict[yahoo_name] = cum
             except Exception as e:
@@ -94,10 +108,14 @@ def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs):
     if len(returns_dict) == 0:
         return {}, {}
     # Zeitachsen synchronisieren
-    common_index = sorted(set.intersection(*(set(r.index) for r in returns_dict.values())))
-    for name in returns_dict:
-        returns_dict[name] = returns_dict[name].loc[common_index]
-        cumulative_dict[name] = cumulative_dict[name].loc[common_index]
+    try:
+        common_index = sorted(set.intersection(*(set(r.index) for r in returns_dict.values())))
+        for name in returns_dict:
+            returns_dict[name] = returns_dict[name].loc[common_index]
+            cumulative_dict[name] = cumulative_dict[name].loc[common_index]
+    except Exception as e:
+        st.warning("Fehler beim Synchronisieren der Zeitachsen. Eventuell gibt es zu wenig überlappende Daten.")
+        return {}, {}
     return returns_dict, cumulative_dict
 
 def calculate_metrics(returns_dict, cumulative_dict):
@@ -145,7 +163,7 @@ def calculate_metrics(returns_dict, cumulative_dict):
         metrics.loc[name, 'Positive Months'] = positive_months
     return metrics
 
-returns_dict, cumulative_dict = load_and_sync_data(CSV_PATHS, shi_csv_files, ticker_inputs)
+returns_dict, cumulative_dict = load_and_sync_data(CSV_PATHS, shi_csv_files, ticker_inputs, start_date, end_date)
 
 if len(returns_dict) == 0:
     st.info("Bitte mindestens eine CSV-Datei bereitstellen oder einen gültigen Yahoo Ticker eintragen.")
