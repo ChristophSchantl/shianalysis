@@ -25,7 +25,6 @@ st.title("📊 Strategie-Analyse & Risiko-Kennzahlen")
 
 st.sidebar.header("🔄 Datenquellen auswählen")
 
-# OPTIONAL: Weitere CSV Uploads (deaktivierbar)
 shi_csv_files = st.sidebar.file_uploader(
     "Weitere SHI Zertifikate (optional, CSV)", 
     type=["csv"], 
@@ -58,6 +57,13 @@ def load_returns_from_yahoo(ticker):
     cumulative = (1 + returns).cumprod()
     return returns, cumulative
 
+def get_yahoo_name(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        return info.get('longName') or info.get('shortName') or ticker
+    except Exception:
+        return ticker
+
 @st.cache_data
 def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs):
     returns_dict, cumulative_dict = {}, {}
@@ -75,13 +81,14 @@ def load_and_sync_data(csv_paths, shi_csv_files, ticker_inputs):
         ret, cum = load_returns_from_csv(file)
         returns_dict[name] = ret
         cumulative_dict[name] = cum
-    # Yahoo Ticker
-    for name, ticker in ticker_inputs.items():
+    # Yahoo Ticker - mit echtem Namen
+    for ticker in ticker_inputs.values():
         if ticker:
             try:
+                yahoo_name = get_yahoo_name(ticker)
                 ret, cum = load_returns_from_yahoo(ticker)
-                returns_dict[name] = ret
-                cumulative_dict[name] = cum
+                returns_dict[yahoo_name] = ret
+                cumulative_dict[yahoo_name] = cum
             except Exception as e:
                 st.warning(f"Fehler beim Laden von Yahoo Ticker {ticker}: {e}")
     if len(returns_dict) == 0:
